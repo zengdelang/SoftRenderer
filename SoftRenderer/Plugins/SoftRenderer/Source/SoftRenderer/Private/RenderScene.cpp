@@ -1,0 +1,13 @@
+﻿#include "RenderScene.h"
+
+/////////////////////////////////////////////////////
+// URenderScene
+
+URenderScene::URenderScene(const FObjectInitializer& ObjectInitializer)
+	: Super(ObjectInitializer)
+{
+
+}
+
+/////////////////////////////////////////////////////
+

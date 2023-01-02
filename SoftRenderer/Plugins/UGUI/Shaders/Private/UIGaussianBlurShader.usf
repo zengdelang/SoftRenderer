@@ -1,0 +1,204 @@
+#include "/Engine/Private/Common.ush"
+
+#define UI_BILINEAR_FILTER_METHOD 1
+#define MAX_SAMPLES 127
+
+#if UI_BILINEAR_FILTER_METHOD
+
+// Weigts and offsets are packed into 4 floats (Weight, Offset, Weight, Offset)
+float4 WeightAndOffsets[MAX_SAMPLES/2];
+#else
+
+#define MAX_SAMPLES 127
+// Weigts and offsets are packed into 4 floats (Weight, Offset, Weight, Offset)
+float4 WeightAndOffsets[MAX_SAMPLES];
+
+#endif
+
+/** Blur sample count */
+int SampleCount;
+
+
+Texture2D ElementTexture;
+SamplerState ElementTextureSampler;
+
+float4 BufferSizeAndDirection;
+float4 UVBounds;
+float4 ShaderParams;
+
+float4 GetSample(float Weight, float Offset, float2 UV)
+{
+	float2 MinUV = UVBounds.xy;
+	float2 MaxUV = UVBounds.zw;
+	
+	const float2 Direction = BufferSizeAndDirection.zw;
+	const float2 BufferSize = BufferSizeAndDirection.xy;
+	const float2 UVOffset = float2(Offset*BufferSize.x*Direction.x, Offset*BufferSize.y*Direction.y);
+
+	return 
+		Texture2DSample(ElementTexture, ElementTextureSampler, clamp(UV + UVOffset, MinUV, MaxUV)) * Weight
+		+ Texture2DSample(ElementTexture, ElementTextureSampler, clamp(UV - UVOffset, MinUV, MaxUV)) * Weight;
+}
+
+float Get2DClippingWithSoftness(in float2 Position,
+					in float2 BottomLeftClipRect,
+					in float2 TopRightClipRect,
+					in float2 BottomLeftClipSoftnessRect,
+					in float2 TopRightClipSoftnessRect)
+{
+	float XAlpha = smoothstep(BottomLeftClipRect.x, BottomLeftClipSoftnessRect.x, Position.x) -
+		smoothstep(TopRightClipSoftnessRect.x, TopRightClipRect.x, Position.x);
+
+	float YAlpha = smoothstep(BottomLeftClipRect.y, BottomLeftClipSoftnessRect.y, Position.y) -
+		smoothstep(TopRightClipSoftnessRect.y, TopRightClipRect.y, Position.y);
+	
+	return XAlpha * YAlpha;
+}
+
+float4 GaussianBlurMain( FScreenVertexOutput Input ) : SV_Target0
+{
+#if 0
+	float4 OutColor = Texture2DSample(ElementTexture, ElementTextureSampler, Input.UV);
+#else
+
+	float2 MinUV = UVBounds.xy;
+	float2 MaxUV = UVBounds.zw;
+
+	float4 OutColor = Texture2DSample(ElementTexture, ElementTextureSampler, clamp(Input.UV, MinUV, MaxUV)) * WeightAndOffsets[0].x;
+	// First offset is in zw
+	{
+		float Weight = WeightAndOffsets[0].z;
+		float Offset = WeightAndOffsets[0].w;
+
+		OutColor += GetSample(Weight, Offset, Input.UV);
+	}
+
+	for (int i = 2; i<SampleCount; i+=2)
+	{
+		int Index = i/2;
+		{
+			float Weight = WeightAndOffsets[Index].x;
+			float Offset = WeightAndOffsets[Index].y;
+
+			OutColor += GetSample(Weight, Offset, Input.UV);
+		}
+
+		{
+			float Weight = WeightAndOffsets[Index].z;
+			float Offset = WeightAndOffsets[Index].w;
+
+			OutColor += GetSample(Weight, Offset, Input.UV);
+		}
+
+	}
+#endif
+
+	return float4(OutColor.rgb, 1);
+}
+
+Texture2D InTexture;
+SamplerState InTextureSampler;
+
+float4x4 ViewProjectionMatrix;
+float4x4 LocalToWorldMatrix;
+
+float4 UVScaleOffset;
+
+float bRectClipping;
+float4 ClipRect;
+float4 ClipSoftnessRect;
+
+Texture2D MaskTexture;
+SamplerState MaskTextureSampler;
+
+struct FPostProcessElementVSToPS
+{
+    float4 Position : SV_Position;
+    float2 UV0 : TEXCOORD0;
+	float2 UV1 : TEXCOORD1;
+	float2 UV2 : TEXCOORD2;
+	float2 UV3 : TEXCOORD3;
+	float2 UV4 : TEXCOORD4;
+	float2 UV5 : TEXCOORD5;
+	float2 UV6 : TEXCOORD6;
+};
+
+void MainVS(
+    in float3 Position : ATTRIBUTE0,
+    in half4 Color : ATTRIBUTE1,
+    in float2 TextureCoord0 : ATTRIBUTE2,
+    in float2 TextureCoord1 : ATTRIBUTE3,
+    in float2 TextureCoord2 : ATTRIBUTE4,
+    in float2 TextureCoord3 : ATTRIBUTE5,
+    in float2 TextureCoord4 : ATTRIBUTE6,
+    in float2 TextureCoord5 : ATTRIBUTE7,
+    in float2 TextureCoord6 : ATTRIBUTE8,
+    in float2 TextureCoord7 : ATTRIBUTE9,
+	out FPostProcessElementVSToPS Output
+)
+{
+	Output.Position = mul(float4(Position.xyz, 1.0), LocalToWorldMatrix);
+	Output.Position = mul(Output.Position, ViewProjectionMatrix);
+
+	// Convert position to UI space 
+	float2 ClipPosition = float2(Output.Position.x / Output.Position.w, Output.Position.y / Output.Position.w);
+
+	// Output.UV0 = float2(Output.Position.x / Output.Position.w, -Output.Position.y / Output.Position.w) * 0.5 + float2(0.5, 0.5);
+	Output.UV0 = float2(ClipPosition.x, -ClipPosition.y) * 0.5 + float2(0.5, 0.5);
+	Output.UV0 = (Output.UV0  - UVScaleOffset.xy) * UVScaleOffset.zw;
+	
+	// UV1 for GraphicEffects
+	Output.UV1 = TextureCoord1;
+	
+	Output.UV2 = TextureCoord2;
+	
+	// UV3 for Clip 
+	Output.UV3 = TextureCoord3;
+
+	Output.UV4 = TextureCoord0;
+	
+	Output.UV5 = TextureCoord5;
+	Output.UV6 = TextureCoord4;
+
+#if !OUTPUT_MOBILE_HDR && (COMPILER_GLSL_ES2 || COMPILER_GLSL_ES3_1 || COMPILER_GLSL_ES3_1_EXT)
+	Output.Position.y *= -1;
+#endif
+}
+
+void MainPS(
+	FPostProcessElementVSToPS Input,
+	out float4 OutColor : SV_Target0
+)
+{
+	//fp32on
+	OutColor = Texture2DSample(InTexture, InTextureSampler, Input.UV0);
+
+	// GraphicEffects -- Graying and Invert Color
+	half Lum = dot(half3(0.3, 0.59, 0.11), OutColor.rgb);
+	OutColor.rgb = lerp(OutColor.rgb, float3(Lum, Lum, Lum), step(1.0f, Input.UV1.x));
+	OutColor.rgb =  lerp(OutColor.rgb, half3(1, 1, 1) - OutColor.rgb, step(1.0f, Input.UV1.y));
+
+	// Mask
+	const float4 MaskColor = Texture2DSample(MaskTexture, MaskTextureSampler, Input.UV4);
+	OutColor.a = OutColor.a * MaskColor.a;
+	
+	// Rect Clip
+	const float Inside = Get2DClippingWithSoftness(Input.UV3, ClipRect.xy, ClipRect.zw, ClipSoftnessRect.xy, ClipSoftnessRect.zw);
+	OutColor.a = lerp(OutColor.a, OutColor.a * Inside, step(1.0f, bRectClipping));
+
+	// SDF
+	float width = 3;
+	float smoothvaluex = fwidth(Input.UV2.x);
+	float smoothvaluey = fwidth(Input.UV2.y);
+	float alpha_x = smoothstep(-width*smoothvaluex, 0, abs(Input.UV2.x) - 1);
+	float alpha_y = smoothstep(-width*smoothvaluey, 0, abs(Input.UV2.y) - 1);
+	alpha_x = 1 - alpha_x;
+	alpha_y = 1 - alpha_y;
+	OutColor.a = OutColor.a * alpha_x * alpha_y;
+
+	// circle mask
+	float CircleDistance = length(Input.UV6 - half2(0.5,0.5));
+	float CircleDelta = 1.2 * fwidth(CircleDistance);
+	float CircleAlpha = 1.0 - smoothstep(0.5 - CircleDelta, 0.5, CircleDistance);
+	OutColor.a = OutColor.a * lerp(1, CircleAlpha,  Input.UV5.x);
+}

@@ -1,0 +1,75 @@
+#include "/Engine/Private/Common.ush"
+#include "/Engine/Private/GammaCorrectionCommon.ush"
+
+#define SOURCE_IN_LINEAR_SPACE 1
+
+/** Display gamma x:gamma curve adjustment, y:inverse gamma (1/GEngine->DisplayGamma)*/
+half2 GammaValues;
+
+float SwitchVerticalAxisMultiplier;
+
+float bRectClipping;
+float4 ClipRect;
+float4 ClipSoftnessRect;
+
+float2 ViewportUVOffset;
+
+Texture2DArray MainTextureArray;
+SamplerState MainTextureArraySampler;
+
+Texture2D MainTexture;
+SamplerState MainTextureSampler;
+
+half3 GammaCorrect(half3 InColor)
+{
+	half3 CorrectedColor = InColor;
+
+#if SOURCE_IN_LINEAR_SPACE
+	FLATTEN if( GammaValues.y != 1.0f )
+	{
+		CorrectedColor = ApplyGammaCorrection(CorrectedColor, GammaValues.x);
+	}
+#endif
+
+	return CorrectedColor;
+}
+
+float Get2DClipping(in float2 Position,
+					in float2 BottomLeftClipRect,
+					in float2 TopRightClipRect)
+{
+	const float Inside = step(BottomLeftClipRect.x, Position.x) *
+					step(BottomLeftClipRect.y, Position.y) *
+					step(Position.x, TopRightClipRect.x) *
+					step(Position.y, TopRightClipRect.y);
+	
+	return Inside;
+}
+
+float Get2DClippingWithSoftness(in float2 Position,
+					in float2 BottomLeftClipRect,
+					in float2 TopRightClipRect,
+					in float2 BottomLeftClipSoftnessRect,
+					in float2 TopRightClipSoftnessRect)
+{
+	float XAlpha = smoothstep(BottomLeftClipRect.x, BottomLeftClipSoftnessRect.x, Position.x) -
+		smoothstep(TopRightClipSoftnessRect.x, TopRightClipRect.x, Position.x);
+
+	float YAlpha = smoothstep(BottomLeftClipRect.y, BottomLeftClipSoftnessRect.y, Position.y) -
+		smoothstep(TopRightClipSoftnessRect.y, TopRightClipRect.y, Position.y);
+	
+	return XAlpha * YAlpha;
+}
+
+float Get2DCircleClipping(in float2 Position,
+					in float2 BottomLeftClipRect,
+					in float2 TopRightClipRect,
+					in float Width)
+{
+	//fp32on
+	float2 Center = float2((TopRightClipRect.x + BottomLeftClipRect.x) * 0.5, (TopRightClipRect.y + BottomLeftClipRect.y) * 0.5f);
+	float Distance = length((Position-Center) / float2(TopRightClipRect.x - BottomLeftClipRect.x, TopRightClipRect.y  - BottomLeftClipRect.y));
+	float Delta = Width * fwidth(Distance);
+	float Alpha = 1.0 - smoothstep(0.5 - Delta, 0.5, Distance);
+	return Alpha;
+}
