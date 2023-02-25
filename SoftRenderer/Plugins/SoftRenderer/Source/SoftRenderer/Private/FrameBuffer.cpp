@@ -93,6 +93,60 @@ UTexture2D* UFrameBuffer::UpdateTexture2D()
 
 void UFrameBuffer::DrawLine(int32 StartX, int32 StartY, int32 EndX, int32 EndY)
 {
-	
+	int32 Dx=abs(StartX-EndX);
+	int32 Dy=abs(StartY-EndY);
+	int32 E=Dx-Dy*2;
+	int32 Flag=0;
+	int32 Tmp;
+
+	if(Dy>Dx)
+	{
+		Tmp=StartX;
+		StartX=StartY;
+		StartY = Tmp;
+
+		Tmp = EndX;
+		EndX = EndY;
+		EndY = Tmp;
+		Flag=1;
+	}
+
+	if (StartX > EndX)
+	{
+                Tmp = StartX;
+		StartX = EndX;
+		EndX = Tmp;
+
+		Tmp = StartY;
+		StartY = EndY;
+		EndY = Tmp;
+
+	}
+
+	while (StartX<= EndX)
+	{
+		if (Flag == 1)
+		{
+			Point(StartY, StartX,BLue);
+		}
+		else
+		{
+			Point(StartX, StartY, Blue);
+		}
+
+
+		StartX++;
+
+
+		if (E < 0)
+		{
+			E += 2 * Dx;
+			StartY++;
+		}
+		else
+		{
+			E -= 2 * Dy;
+		}
+	}
 }
 /////////////////////////////////////////////////////
